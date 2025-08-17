@@ -1,0 +1,1 @@
+ALTER TABLE messages ADD COLUMN branch_id VARCHAR(256);
