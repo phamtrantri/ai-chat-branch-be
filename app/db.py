@@ -80,12 +80,14 @@ class Database:
             with conn.cursor() as cur:
                 cur.executemany(query, params_list)
     
+    @asynccontextmanager
     async def transaction(self):
         """Get a transaction context manager."""
         if not self.pool:
             raise RuntimeError("Database not connected. Call connect() first.")
         
-        return self.pool.connection()
+        with self.pool.connection() as conn:
+            yield conn
 
 
 # Global database instance
