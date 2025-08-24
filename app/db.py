@@ -51,11 +51,17 @@ class Database:
         with self.pool.connection() as conn:
             yield conn
     
-    async def execute(self, query: str, params: Optional[tuple] = None) -> None:
-        """Execute a query without returning results."""
+    async def execute(self, query: str, params: Optional[tuple] = None, fetch: bool = False):
         async with self.get_connection() as conn:
-            conn.execute(query, params)
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                if fetch:
+                    rows = cur.fetchall()
+                    return [dict(zip([desc[0] for desc in cur.description], row)) for row in rows]
+                return cur
     
+    
+
     async def fetch_one(self, query: str, params: Optional[tuple] = None) -> Optional[Dict[str, Any]]:
         """Fetch a single row."""
         async with self.get_connection() as conn:

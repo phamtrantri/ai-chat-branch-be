@@ -1,5 +1,4 @@
 import asyncio
-import json
 from contextlib import asynccontextmanager
 from email import message
 from dotenv import load_dotenv
@@ -58,8 +57,9 @@ async def root():
 
 
 class ConversationCreate(BaseModel):
-    name: str
+    name: str | None = None
     message_id: str | None = None
+    first_msg: str
 
 class ConversationDetails(BaseModel):
     id: int
@@ -85,12 +85,22 @@ async def getConversationDetails(body: ConversationDetails):
     }
 @app.post("/conversations/v1/create")
 async def createConversations(body: ConversationCreate):
+    result = await Runner.run(agent, f"Summarize this message {body.first_msg} to less than 10 words")
+
+    new_record = None
+
     if (not body.message_id):
-        await db.execute("INSERT INTO conversations (name) VALUES (%s)", (body.name,))
+        new_record = await db.execute("INSERT INTO conversations (name) VALUES (%s) RETURNING *", (result.final_output,), True)
     else:
-        await db.execute("INSERT INTO conversations (name, message_id) VALUES (%s, %s)", (body.name, body.message_id,))
+        new_record = await db.execute("INSERT INTO conversations (name, message_id) VALUES (%s, %s) RETURNING *", (result.final_output, body.message_id,), True)
+
+    await db.execute("INSERT INTO messages (content, conversation_id, role, num_of_children) VALUES (%s, %s, %s, %s)", (body.first_msg, new_record[0]["id"], "user", 0,))
+
     return {
-        "code": 0
+        "code": 0,
+        "data": {
+            "conversation": new_record[0]
+        }
     }
 
 # messages
@@ -111,13 +121,15 @@ async def createConversations(body: ConversationCreate):
 class CreateMessageReq(BaseModel):
     conversation_id: int
     user_message: str
+    is_new_conversation: bool
 
 
 @app.post("/messages/v1/create")
 async def createMessage(body: CreateMessageReq):
     async def generate_stream():
-        # Insert user message first
-        await db.execute("INSERT INTO messages (content, conversation_id, role, num_of_children) VALUES (%s, %s, %s, %s)", (body.user_message, body.conversation_id, "user", 0,))
+        if (not body.is_new_conversation):
+            # Insert user message first
+            await db.execute("INSERT INTO messages (content, conversation_id, role, num_of_children) VALUES (%s, %s, %s, %s)", (body.user_message, body.conversation_id, "user", 0,))
             
         # Get conversation history
         history = await db.fetch_all("SELECT content, role from messages WHERE conversation_id = %s ORDER BY created_at ASC", (body.conversation_id,))
