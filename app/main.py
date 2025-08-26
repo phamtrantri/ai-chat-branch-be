@@ -67,7 +67,7 @@ class ConversationDetails(BaseModel):
 
 @app.post("/conversations/v1/getAll")
 async def getConversations():
-    conversations = await db.fetch_all("SELECT * from conversations")
+    conversations = await db.fetch_all("SELECT * from conversations ORDER BY created_at DESC")
     return {
         "code": 0, 
         "data": {
