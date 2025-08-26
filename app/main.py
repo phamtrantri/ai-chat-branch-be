@@ -75,13 +75,46 @@ async def getConversations():
         }
     }
 
+async def getConversationPath(body: ConversationDetails):
+    conversation = await db.fetch_one("SELECT id, name, message_id FROM conversations WHERE id = %s", (body.id,))
+    path = [{"id": conversation["id"], "name": conversation["name"], "message_id": conversation["message_id"]}]
+    while (conversation["message_id"]):
+        message = await db.fetch_one("SELECT id, content, conversation_id from messages WHERE id = %s", (conversation["message_id"],))
+        conversation = await db.fetch_one("SELECT id, name, message_id from conversations WHERE id = %s", (message["conversation_id"],))
+        path.append({"id": conversation["id"], "name": conversation["name"], "message_id": conversation["message_id"]})
+
+    return path        
+
+
 @app.post("/conversations/v1/getDetails")
 async def getConversationDetails(body: ConversationDetails):
-    messages = await db.fetch_all("SELECT * from messages WHERE conversation_id = %s", (body.id,))
+    messages = await db.fetch_all(
+        """
+        SELECT m.*,
+        COALESCE(cc.child_conversations, '[]'::json) AS child_conversations
+        FROM messages AS m
+        LEFT JOIN LATERAL (
+            SELECT json_agg(
+                json_build_object('id', c.id, 'name', c.name)
+                ORDER BY c.created_at
+            ) AS child_conversations
+            FROM conversations AS c
+            WHERE c.message_id = m.id
+        ) AS cc ON TRUE
+        WHERE m.conversation_id = %s
+        ORDER BY m.created_at;
+        """,
+        (body.id,)
+    )
+
+    path = await getConversationPath(body)
+    path.reverse()
+    
     return {
         "code": 0,
         "data": {
-            "messages": messages
+            "messages": messages,
+            "path": path
         }
     }
 @app.post("/conversations/v1/create")
@@ -103,21 +136,6 @@ async def createConversations(body: ConversationCreate):
             "conversation": new_record[0]
         }
     }
-
-# messages
-# class GetNestedMessagesReq(BaseModel):
-#     parent_msg_id: int
-#     branch_id: int
-
-# @app.post("/messages/v1/getNestedMessages")
-# async def getNestedMessages(body: GetNestedMessagesReq):
-#     messages = await db.fetch_all("SELECT * from messages where parent_id = %s AND branch_id = %s", (body.parent_msg_id, body.branch_id,))
-#     return {
-#         "code": 0,
-#         "data": {
-#             "messages": messages
-#         }
-#     }
 
 class CreateMessageReq(BaseModel):
     conversation_id: int
@@ -184,49 +202,3 @@ async def createMessage(body: CreateMessageReq):
         media_type="application/json",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
     )
-
-
-
-
-# class CreateNestedMessagesReq(BaseModel):
-#     conversation_id: int
-#     parent_msg_id: int
-#     user_message: str
-#     branch_id: str
-#     depth: str
-
-# @app.post("/messages/v1/createNestedMessage")
-# async def createNestedMessage(body: CreateNestedMessagesReq):
-#     try:
-#         async def getHistory(parent_msg_id, branch_id):
-#             if (not parent_msg_id):
-#                 return await db.fetch_all("SELECT content, role, parent_msg_id, branch_id from messages WHERE conversation_id = %s ORDER BY created_at ASC", (body.conversation_id))
-            
-#             [parent_msg, db_result] = await asyncio.gather([
-#                 db.fetch_one("SELECT parent_msg_id, branch_id from messages WHERE id = %s", (parent_msg_id)),
-#                 db.fetch_all("SELECT content, role from messages WHERE parent_msg_id = %s AND branch_id = %s ORDER BY created_at ASC", (parent_msg_id, branch_id,))
-#             ])
-
-#             return await getHistory(parent_msg.parent_msg_id, parent_msg.branch_id) + db_result
-
-#         history = await getHistory(body.parent_msg_id, body.branch_id)
-#         result = await Runner.run(agent, history + [{"role": "user", "content": body.user_message}])
-
-#         # Use transaction to ensure both inserts succeed or fail together
-#         async with db.transaction() as conn:
-#             with conn.cursor() as cur:
-#                 cur.execute("BEGIN")
-#                 cur.execute("SELECT id FROM messages WHERE branch_id = %s LIMIT 1", (body.branch_id,))
-#                 branch_exists = cur.fetchone()
-#                 if not branch_exists:
-#                     cur.execute("UPDATE messages SET num_of_children = num_of_children + 1 WHERE id = %s", (body.parent_msg_id,))
-#                 cur.execute("INSERT INTO messages (content, conversation_id, branch_id, role, depth) VALUES (%s, %s, %s, %s, %s, %s)", (body.user_message, body.conversation_id, body.branch_id, "user", body.depth,))
-#                 cur.execute("INSERT INTO messages (content, conversation_id, branch_id, role, depth) VALUES (%s, %s, %s, %s, %s, %s)", (result.final_output, body.conversation_id, body.branch_id, "assistant", body.depth,))
-#                 cur.execute("COMMIT")
-        
-#         return {"code": 0}
-#     except Exception as e:
-#         return {"code": 1}
-    
-
-
