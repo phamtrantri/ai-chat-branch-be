@@ -4,6 +4,7 @@ from email import message
 from dotenv import load_dotenv
 from agents import Agent, Runner
 from fastapi import FastAPI
+import json
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from httpx import Response
@@ -58,7 +59,7 @@ async def root():
 
 class ConversationCreate(BaseModel):
     name: str | None = None
-    message_id: str | None = None
+    message_id: int | None = None
     first_msg: str
 
 class ConversationDetails(BaseModel):
@@ -124,29 +125,63 @@ class CreateMessageReq(BaseModel):
     is_new_conversation: bool
 
 
+async def getThreadHistory(thread):
+    conversation = thread
+    history = []
+    while (conversation["message_id"]):
+        message = await db.fetch_one("SELECT * from messages WHERE id = %s", (conversation["message_id"],))
+        conversation = await db.fetch_one("SELECT * from conversations WHERE id = %s", (message["conversation_id"],))
+
+        currHistory = await db.fetch_all("SELECT content, role from messages WHERE conversation_id = %s AND created_at < %s ORDER BY created_at ASC", (conversation["id"], message["created_at"],))
+        history += currHistory
+    
+    return history
+
 @app.post("/messages/v1/create")
 async def createMessage(body: CreateMessageReq):
     async def generate_stream():
         if (not body.is_new_conversation):
             # Insert user message first
             await db.execute("INSERT INTO messages (content, conversation_id, role, num_of_children) VALUES (%s, %s, %s, %s)", (body.user_message, body.conversation_id, "user", 0,))
-            
-        # Get conversation history
-        history = await db.fetch_all("SELECT content, role from messages WHERE conversation_id = %s ORDER BY created_at ASC", (body.conversation_id,))
-            
-        # Stream the response
+        # Get conversation
+        conversation = await db.fetch_one("SELECT * from conversations WHERE id = %s", (body.conversation_id,))
+        history = []
+        # means conversation is a thread
+        if (conversation["message_id"]):
+            history = await getThreadHistory(conversation)
+        else:
+            history = await db.fetch_all("SELECT content, role from messages WHERE conversation_id = %s ORDER BY created_at ASC", (body.conversation_id,))
+        
+        # Prepare assistant placeholder to obtain message id
         full_response = ""
+        new_message = await db.execute(
+            "INSERT INTO messages (content, conversation_id, role, num_of_children) VALUES (%s, %s, %s, %s) RETURNING *",
+            ("", body.conversation_id, "assistant", 0,),
+            True
+        )
+        
+        # Update num_of_children for the parent message
+        if conversation["message_id"]:
+            await db.execute(
+                "UPDATE messages SET num_of_children = num_of_children + 1 WHERE id = %s",
+                (conversation["message_id"],)
+            )
+            
+        message_id = new_message[0]["id"]
+        
+        # Stream the response
         result = Runner.run_streamed(agent, history + [{"role": "user", "content": body.user_message}])
         async for event in result.stream_events():
             if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
                 full_response += event.data.delta
-                yield event.data.delta
+                yield json.dumps({"message_id": message_id, "content": event.data.delta}) + "\n"
             
-        # Insert assistant message after streaming completes
-        await db.execute("INSERT INTO messages (content, conversation_id, role, num_of_children) VALUES (%s, %s, %s, %s)", (full_response, body.conversation_id, "assistant", 0,))
+        # Update assistant message with full content after streaming completes
+        await db.execute("UPDATE messages SET content = %s WHERE id = %s", (full_response, message_id,))
+        
     return StreamingResponse(
         generate_stream(),
-        media_type="text/plain",
+        media_type="application/json",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
     )
 
