@@ -150,7 +150,7 @@ async def getThreadHistory(thread):
         message = await db.fetch_one("SELECT * from messages WHERE id = %s", (conversation["message_id"],))
         conversation = await db.fetch_one("SELECT * from conversations WHERE id = %s", (message["conversation_id"],))
 
-        currHistory = await db.fetch_all("SELECT content, role from messages WHERE conversation_id = %s AND created_at < %s ORDER BY created_at ASC", (conversation["id"], message["created_at"],))
+        currHistory = await db.fetch_all("SELECT content, role from messages WHERE conversation_id = %s AND created_at <= %s ORDER BY created_at ASC", (conversation["id"], message["created_at"],))
         history += currHistory
     
     return history
@@ -167,6 +167,7 @@ async def createMessage(body: CreateMessageReq):
         # means conversation is a thread
         if (conversation["message_id"]):
             history = await getThreadHistory(conversation)
+            print(history)
         else:
             history = await db.fetch_all("SELECT content, role from messages WHERE conversation_id = %s ORDER BY created_at ASC", (body.conversation_id,))
         
