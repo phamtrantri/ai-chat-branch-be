@@ -1,13 +1,11 @@
 import asyncio
 from contextlib import asynccontextmanager
-from email import message
 from dotenv import load_dotenv
-from agents import Agent, Runner
+from agents import Agent, Runner, WebSearchTool
 from fastapi import FastAPI
 import json
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from httpx import Response
 from openai.types.responses import ResponseTextDeltaEvent
 from pydantic import BaseModel
 from app.db import db
@@ -35,13 +33,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-agent = Agent(name="Assistant", instructions="You are a helpful assistant")
-
-# conversations (id, name)
-# messages (content, conversation_id, parent_id, role, depth, num_of_children)
-
-
-
+agent = Agent(name="Assistant", instructions=f"You are a helpful assistant. \
+    You try to give answers as precise as possible, in professional tone. \
+    You elaborate your asnwer using systematic approach. \
+    Try to give example to support your answer. \
+    You give the answers in markdown format, use bullet point list with clear headers (E.g.: #, ##, etc...) and separators between sections \
+    At the end of your answer, ask user follow up questions, diving to topics, or expanding the conversations", 
+    # tools=[WebSearchTool()]
+    )
 
 
 @app.get("/")
